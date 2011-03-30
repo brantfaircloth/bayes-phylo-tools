@@ -69,15 +69,6 @@ def delete_node(xml, node, level = 1):
         xml.remove(node)
     return xml
 
-def delete_children_from_node(xml, node, child_parameter, level=1):
-    level = get_level(level, node)
-    search = xml.find(level)
-    for node in search:
-        for child in iter(node):
-            if child.tag == 'parameter' and child.get('idref') == child_parameter:
-                search.remove(node)
-    return xml
-
 def delete_children_from_log_node(xml, node, child_parameter, level = 2):
     level = get_level(level, node)
     search = xml.findall(level)
@@ -221,8 +212,8 @@ def insert_to_generic_sections(xml, values, section, id_name, level = 2):
                 result.insert(k, v)
     return xml
 
-def insert_sites_from_models(xml, models, insert_position, model_data):
-    sites = model_data.find('patternSection')[0]
+def insert_patterns_for_locus(xml, models, insert_position, model_data):
+    sites = model_data.find('partition')[0]
     test = []
     for model in models:
         for locus in models[model]:
@@ -234,34 +225,199 @@ def insert_sites_from_models(xml, models, insert_position, model_data):
             insert_position += 1
     return xml
 
+def append_to_element_name(element, key, text):
+    return '.'.join([text, element.get(key)])
+
+
+def strip(element, text, tail = None, comment = False):
+    if not tail:
+        tail = text
+    if element.text and not comment:
+        l = len(element.text.split("\t"))
+        element.text = "\n" + "\t" * (l - text)
+    if element.tail:
+        l = len(element.tail.split("\t"))
+        element.tail = "\n" + "\t" * (l - tail)
+    return element
+
+def iterate_over_model_children(element, parent, model, locus, site = None, dedent = 2):
+    #pdb.set_trace()
+    try:
+        if element.tag.func_name == 'Comment':
+            element = strip(element, dedent + 1, None, True)
+    except:
+        if element.get('id') == model.upper():
+            name = append_to_element_name(element, 'id', locus)
+            element.set('id', name)
+            element = strip(element, dedent)
+        elif element.get('idref'):
+            #pdb.set_trace()
+            name = append_to_element_name(element, 'idref', locus)
+            element.set('idref', name)
+            element = strip(element, dedent + 1)
+        elif element.tag == 'parameter':
+            #
+            name = append_to_element_name(element, 'id', locus)
+            element.set('id', name)
+            element = strip(element, dedent + 1)
+        else:
+            element = strip(element, dedent + 1)
+    for child in element:
+        iterate_over_model_children(child, element, model, locus)
+    return element
+
+def insert_comments(xml, insert_position, text):
+    comment = Comment(text="{0} automatically inserted by beast_tools".format(text))
+    comment.tail = '\n\n\t'
+    xml.insert(insert_position, comment)
+    insert_position += 1
+    return xml, insert_position
+
+def get_subs_model_name(model):
+    m = model.split('-')[1]
+    return m.rstrip('IG').lower()
+
+def get_site_model_name(model):
+    return model.split('-')[1].lower()
+
+def insert_operators_for_locus(xml, models, snippets):
+    operators = xml.find('operators')
+    c = 0
+    for name in models:
+        m_name = get_subs_model_name(name)
+        s_name = get_site_model_name(name)
+        model_operators = snippets.find(m_name).find('operators')
+        for locus in models[name]:
+            frequencies = model_operators.find('frequencies')
+            if frequencies:
+                frequencies_copy = copy.deepcopy(frequencies)
+                frequencies_copy = iterate_over_model_children(frequencies_copy, None, m_name, locus, 0)
+                pdb.set_trace()
+            transtrans = model_operators.find('transtrans')
+            if transtrans:
+                transtrans_copy = copy.deepcopy(transtrans)
+                transtrans_copy = iterate_over_model_children(transtrans_copy, None, m_name, locus, 0)
+            operators.insert(-1, frequencies_copy)
+            operators.insert(-1, transtrans_copy)
+    return xml
+
+def insert_models_for_locus(xml, models, insert_position, snippets):
+    xml, insert_position = insert_comments(xml, insert_position, "Begin models")
+    for m in models:
+        m_name = get_subs_model_name(m)
+        model = snippets.find(m_name)
+        structure = model.find('model')[0]
+        for locus in models[m]:
+            # create a new object copy to edit on every iteration
+            structure_copy = copy.deepcopy(structure)
+            structure_copy = iterate_over_model_children(structure_copy, None, m_name, locus)
+            xml.insert(insert_position, structure_copy)
+            insert_position += 1
+            #pdb.set_trace()
+    xml, insert_position = insert_comments(xml, insert_position, "End models")
+    return xml, insert_position
+
+def insert_site_models_for_locus(xml, models, insert_position, snippets):
+    xml, insert_position = insert_comments(xml, insert_position, "Begin sites")
+    for name in models:
+        m_name = get_subs_model_name(name)
+        s_name = get_site_model_name(name)
+        site_model = snippets.find(m_name).find('sites').find(s_name)[0]
+        for locus in models[name]:
+            site_model_copy = copy.deepcopy(site_model)
+            site_model_copy = iterate_over_model_children(site_model_copy, None, s_name, locus, m_name, 3)
+            xml.insert(insert_position, site_model_copy)
+            insert_position += 1
+    xml, insert_position = insert_comments(xml, insert_position, "End sites")
+    return xml, insert_position
+
+def iterate_over_likelihood(element, m_name, s_name, locus):
+    element.set('id', "{0}.likelihood".format(locus))
+    for child in element:
+        if child.tag == 'patterns':
+            child.set('idref', locus)
+        #elif child.tag == 'treeModel':
+        #    child.set('idref', "{0}.{1}".format(locus, m_name.upper()))
+        elif child.tag == 'siteModel':
+            child.set('idref', "{0}.{1}".format(locus, s_name.upper()))
+        else:
+            pass
+    return element
+
+def insert_tree_likelihoods_for_locus(xml, models, insert_position, snippets):
+    xml, insert_position = insert_comments(xml, insert_position, "Begin likelihoods")
+    for name in models:
+        m_name = get_subs_model_name(name)
+        s_name = get_site_model_name(name)
+        likelihood = snippets.find('likelihood')[0]
+        for locus in models[name]:
+            likelihood_copy = copy.deepcopy(likelihood)
+            likelihood_copy = iterate_over_likelihood(likelihood_copy, m_name, s_name, locus)
+            xml.insert(insert_position, likelihood_copy)
+            insert_position += 1
+    xml, insert_position = insert_comments(xml, insert_position, "End likelihoods")
+    return xml, insert_position
+
+def get_items_to_recursively_delete(element, value, to_delete, parent = None):
+    if element.tag == 'parameter' and element.get('idref') in value:
+        to_delete.append(parent)
+    for child in element:
+        get_items_to_recursively_delete(child, value, to_delete, element)
+    return to_delete
+
+def delete_children_from_node(xml, section, value):
+    to_delete = get_items_to_recursively_delete(section, value, [])
+    [section.remove(d) for d in to_delete]
+    return xml
+
+def get_file_log_section(xml):
+    log_sections = xml.find('mcmc').findall('log')
+    for section in log_sections:
+        if section.get('id') == 'fileLog':
+            return section[0]
+    
 def main():
     super_concat = False
     options, args = interface()
     xml = ElementTree().parse(options.input, parser=XMLParser(target=MyTreeBuilder()))
     # delete the older subs. models from the xml file
-    for node in ['HKYModel','siteModel', 'patterns']:
+    for node in ['HKYModel', 'gtrModel','siteModel', 'patterns', 'treeLikelihood']:
         xml = delete_node(xml, node, 1) 
-    if super_concat:
-        xml = delete_node(xml, 'treeLikehood', 1)
     # delete the kappa and frequency parameters in 'operators'
-    for parameter in ['kappa', 'frequencies']:
-        xml = delete_children_from_node(xml, 'operators', parameter)
-        xml = delete_children_from_node(xml, 'prior', parameter, 2)
-        xml = delete_children_from_log_node(xml, 'log', parameter)
-    # jettison some comments
-    xml = comment_remover(xml, ['HKY substitution model','site model', 'The unique patterns from 1 to end', 'npatterns=']) 
-    # get our subs model information
-    #sub_models_from_modeltest = {line.strip().split('\t')[0]:line.strip().split('\t')[1].split('-')[1]
-    #                                for line in open(options.subs, 'rU')}
-    sub_models_from_modeltest = cPickle.load(open(options.subs))
-    model_data = ElementTree().parse(options.params, parser=XMLParser(target=MyTreeBuilder()))
+    delete = ['kappa', 'frequencies', 'alpha', 'pInv', 'ac', 'ag', 'at', 'cg', 'gt']
+    xml = delete_children_from_node(xml, xml.find('operators'), delete)
+    xml = delete_children_from_node(xml, xml.find('mcmc').find('posterior').find('prior'), delete)
+    # there are 2 log tags, disambiguated w/ id params.  delete elements from 
+    # the one we want (fileLog)
+    xml = delete_children_from_node(xml, get_file_log_section(xml), delete)
     
-    # generate sites xml
+    # jettison some comments
+    xml = comment_remover(xml, ['The general time reversible', 'HKY substitution model','site model', 'The unique patterns from 1 to end', 'npatterns=']) 
+    
+    # load our substitution model information
+    substitution_models = cPickle.load(open(options.subs))
+    snippets = ElementTree().parse(options.params, parser=XMLParser(target=MyTreeBuilder()))
+    
+    # insert patterns on a per locus basis
     insert_position = get_position(xml, 'alignment')
-    xml = insert_sites_from_models(xml, sub_models_from_modeltest, insert_position, model_data)
+    xml = insert_patterns_for_locus(xml, substitution_models, insert_position, snippets)
+    
+    # insert substitution models on a per locus basis
+    insert_position = get_position(xml, 'strictClockBranchRates')
+    xml, insert_position = insert_models_for_locus(xml, substitution_models, insert_position, snippets)
+    
+    # insert site models on a per locus basis
+    xml, insert_position = insert_site_models_for_locus(xml, substitution_models, insert_position, snippets)
+    
+    # insert tree likelihoods on a per locus basis
+    xml, insert_position = insert_tree_likelihoods_for_locus(xml, substitution_models, insert_position, snippets)
+    
+    # insert operators
+    xml = insert_operators_for_locus(xml, substitution_models, snippets)
     write(xml, options.output)
     pdb.set_trace()
-    model_names, site_names = get_xml_model_names(set(sub_models_from_modeltest.values()))
+    
+    """model_names, site_names = get_xml_model_names(set(sub_models_from_modeltest.values()))
     
     # get the xml data that we need to add for the models and their parameters
     models_to_add = get_generic_section_to_add(model_names, model_data, 'models')
@@ -287,6 +443,7 @@ def main():
     # alter the log node to collect data
     xml = insert_to_generic_sections(xml, log_entries_to_add, 'log', 'fileLog')
     # write to the output file
+    """
     
 
 
