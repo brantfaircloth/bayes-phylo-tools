@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 """
-beast_concatter.py
+nexus_to_concat.py
 
 Created by Brant Faircloth on 2011-03-05.
 Copyright (c) 2011 Brant Faircloth. All rights reserved.
@@ -13,8 +13,6 @@ import pdb
 import glob
 import optparse
 import cPickle
-from Bio import AlignIO
-from tools.align.concatenate import ConcatenatedAlignment
 from Bio.Nexus import Nexus
 from collections import OrderedDict
 
@@ -41,8 +39,10 @@ type='string', default = None, help='The path to the nexus files.',
 metavar='FILE')
 
     p.add_option('--mr-bayes', dest = 'mrbayes', action='store_true', 
-default=False, help='[Optional] Format output for MrBayes.'
-+' of sequence.')
+default=False, help='[Optional] Format output for MrBayes.')
+
+    p.add_option('--interleave', dest = 'interleave', action='store_true', 
+default=False, help='[Optional] Interleave sequence in nexus.')
 
     (options,arg) = p.parse_args()
     if not options.models or not options.aligns:
@@ -57,26 +57,6 @@ def get_loci_and_models(infile):
         group = loci.setdefault(ls[1], OrderedDict())
         group[ls[0]] = None
     return loci
-
-def concatenate(metadata, aligns):
-    concat = ConcatenatedAlignment()
-    start = 1
-    for model in metadata:
-        for locus in metadata[model]:
-            align_file = os.path.join(aligns, "{0}.nex".format(locus))
-            align = AlignIO.read(open(align_file), "nexus")
-            #pdb.set_trace()
-            end = start + align.get_alignment_length() - 1
-            metadata[model][locus] = (start, end)
-            concat.add(align)
-            start = end + 1
-    return concat, metadata
-
-def save_concat_align(concat, outfile, format = "nexus"):
-    o = open(outfile, 'w')
-    pdb.set_trace()
-    o.write(concat.format(format))
-    o.close()
 
 def save_concat_metadata(metadata, outfile):
     o = open(outfile, 'w')
@@ -105,37 +85,40 @@ def add_mr_bayes_params(metadata, outfile, partition_name = 'fully'):
         m = SUBS[model]
         if m['rates']:
             #pdb.set_trace()
-            lset = "\tlset applyto=({0}) nst={1} rates={2}\n".format(','.join(params[model]), m['nst'], m['rates'])
+            lset = "\tlset applyto=({0}) nst={1} rates={2};\n".format(','.join(params[model]), m['nst'], m['rates'])
         else:
-            lset = "\tlset applyto=({0}) nst={1}\n".format(','.join(params[model]), m['nst'])
+            lset = "\tlset applyto=({0}) nst={1};\n".format(','.join(params[model]), m['nst'])
         o.write(lset)
         if m['statefreqpr']:
-            prset = "\tprset applyto=({0}) statefreqpr={1}\n".format(','.join(params[model]), m['statefreqpr'])
+            prset = "\tprset applyto=({0}) statefreqpr={1};\n".format(','.join(params[model]), m['statefreqpr'])
             o.write(prset)
-    o.write('\tunlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all)')
+    o.write('\tunlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all);\n')
     o.write('end;')
     o.close()
-    
-def nexus_concat(aligns):
-    #pdb.set_trace()
-    nexus_files = [open(f) for f in glob.glob(os.path.join(aligns, '*.nex'))]
-    to_combine = [(f.name, Nexus.Nexus(f)) for f in nexus_files]
+
+def concatenate(metadata, aligns):
+    to_combine = []
+    start = 1
+    for model in metadata:
+        for locus in metadata[model]:
+            nex = Nexus.Nexus(open(os.path.join(aligns, "{0}.nex".format(locus))))
+            end = start + nex.nchar - 1
+            metadata[model][locus] = (start, end)
+            to_combine.append((locus, nex))
+            start = end + 1
     combined = Nexus.combine(to_combine)
-    return combined
+    #pdb.set_trace()
+    return combined, metadata
 
 def main():
     options, args = interface()
     metadata = get_loci_and_models(options.models)
-    #start = 1
-    #concat, metadata = concatenate(metadata, options.aligns)
-    combined = nexus_concat(options.aligns)
-    pdb.set_trace()
-    combined.write_nexus_data(filename=options.concat, interleave=True)
-    #save_concat_align(concat, options.concat)
-    #if not options.mrbayes:
-    #    save_concat_metadata(metadata, options.metadata)
-    #else:
-    #    add_mr_bayes_params(metadata, options.concat)
+    concat, metadata = concatenate(metadata, options.aligns)
+    concat.write_nexus_data(filename=options.concat, interleave=options.interleave, append_sets = False)
+    if not options.mrbayes:
+        save_concat_metadata(metadata, options.metadata)
+    else:
+        add_mr_bayes_params(metadata, options.concat)
     #pdb.set_trace()
     
 SUBS = {
