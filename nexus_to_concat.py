@@ -40,9 +40,15 @@ metavar='FILE')
 
     p.add_option('--mr-bayes', dest = 'mrbayes', action='store_true', 
 default=False, help='[Optional] Format output for MrBayes.')
+    
+    p.add_option('--fully', dest = 'fully', action='store_true', 
+default=False, help='Fully partition the data (or partition by model).')
 
     p.add_option('--interleave', dest = 'interleave', action='store_true', 
 default=False, help='[Optional] Interleave sequence in nexus.')
+
+    p.add_option('--unlink', dest = 'unlink', action='store_true', 
+default=False, help='[Optional] Unlink the models.')
 
     (options,arg) = p.parse_args()
     if not options.models or not options.aligns:
@@ -63,7 +69,7 @@ def save_concat_metadata(metadata, outfile):
     cPickle.dump(metadata, o)
     o.close()
 
-def add_mr_bayes_params(metadata, outfile, partition_name = 'fully'):
+def add_mr_bayes_params(metadata, outfile, partition_fully, partition_name = 'fully', unlink = False):
     o = open(outfile, 'a')
     o.write('begin mrbayes;\n')
     #o.write('\tset autoclose=yes nowarn=yes;\n\texecute test.nex;\n')
@@ -72,11 +78,17 @@ def add_mr_bayes_params(metadata, outfile, partition_name = 'fully'):
     c = 1
     for model in metadata:
         short_name = model.split('-')[1]
-        
         params[short_name] = []
-        for locus in metadata[model]:
-            o.write('\tcharset {0} = {1} - {2};\n'.format(locus, metadata[model][locus][0], metadata[model][locus][1]))
-            partitions.append(locus)
+        if partition_fully:
+            for locus in metadata[model]:
+                o.write('\tcharset {0} = {1} - {2};\n'.format(locus, metadata[model][locus][0], metadata[model][locus][1]))
+                partitions.append(locus)
+                params[short_name].append(str(c))
+                c += 1
+        else:
+            #pdb.set_trace()
+            o.write('\tcharset {0} = {1} - {2};\n'.format(short_name, metadata[model][0], metadata[model][1]))
+            partitions.append(short_name)
             params[short_name].append(str(c))
             c += 1
     o.write('\tpartition {0} = {1}: {2};\n'.format(partition_name, len(partitions), ', '.join(partitions)))
@@ -92,11 +104,12 @@ def add_mr_bayes_params(metadata, outfile, partition_name = 'fully'):
         if m['statefreqpr']:
             prset = "\tprset applyto=({0}) statefreqpr={1};\n".format(','.join(params[model]), m['statefreqpr'])
             o.write(prset)
-    o.write('\tunlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all);\n')
+    if unlink:
+        o.write('\tunlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all);\n')
     o.write('end;')
     o.close()
 
-def concatenate(metadata, aligns):
+def fully_partition(metadata, aligns):
     to_combine = []
     start = 1
     for model in metadata:
@@ -110,15 +123,39 @@ def concatenate(metadata, aligns):
     #pdb.set_trace()
     return combined, metadata
 
+def model_partition(metadata, aligns):
+    to_combine = []
+    start = 1
+    end = 0
+    new_metadata = OrderedDict()
+    for model in metadata:
+        for locus in metadata[model]:
+            nex = Nexus.Nexus(open(os.path.join(aligns, "{0}.nex".format(locus))))
+            end += nex.nchar
+            to_combine.append((locus, nex))
+        new_metadata[model] = (start, end)
+        start = end + 1
+    combined = Nexus.combine(to_combine)
+    #pdb.set_trace()
+    return combined, new_metadata
+
 def main():
     options, args = interface()
     metadata = get_loci_and_models(options.models)
-    concat, metadata = concatenate(metadata, options.aligns)
+    #concat, metadata = fully_partition(metadata, options.aligns)
+    if options.fully:
+        concat, metadata = fully_partition(metadata, options.aligns)
+    else:
+        concat, metadata = model_partition(metadata, options.aligns)
     concat.write_nexus_data(filename=options.concat, interleave=options.interleave, append_sets = False)
     if not options.mrbayes:
         save_concat_metadata(metadata, options.metadata)
     else:
-        add_mr_bayes_params(metadata, options.concat)
+        if options.fully:
+            add_mr_bayes_params(metadata, options.concat, options.fully, partition_name = 'fully', unlink = options.unlink)
+        else:
+            add_mr_bayes_params(metadata, options.concat, options.fully, partition_name = 'partial', unlink = options.unlink)
+            
     #pdb.set_trace()
     
 SUBS = {
