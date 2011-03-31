@@ -10,10 +10,12 @@ Copyright (c) 2011 Brant Faircloth. All rights reserved.
 import os
 import sys
 import pdb
+import glob
 import optparse
 import cPickle
 from Bio import AlignIO
 from tools.align.concatenate import ConcatenatedAlignment
+from Bio.Nexus import Nexus
 from collections import OrderedDict
 
 def interface():
@@ -72,6 +74,7 @@ def concatenate(metadata, aligns):
 
 def save_concat_align(concat, outfile, format = "nexus"):
     o = open(outfile, 'w')
+    pdb.set_trace()
     o.write(concat.format(format))
     o.close()
 
@@ -109,25 +112,34 @@ def add_mr_bayes_params(metadata, outfile, partition_name = 'fully'):
         if m['statefreqpr']:
             prset = "\tprset applyto=({0}) statefreqpr={1}\n".format(','.join(params[model]), m['statefreqpr'])
             o.write(prset)
-    o.write('unlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all)')
+    o.write('\tunlink statefreq=(all) revmat=(all) shape=(all) pinvar=(all) tratio=(all)')
     o.write('end;')
     o.close()
     
-            
+def nexus_concat(aligns):
+    #pdb.set_trace()
+    nexus_files = [open(f) for f in glob.glob(os.path.join(aligns, '*.nex'))]
+    to_combine = [(f.name, Nexus.Nexus(f)) for f in nexus_files]
+    combined = Nexus.combine(to_combine)
+    return combined
 
 def main():
     options, args = interface()
     metadata = get_loci_and_models(options.models)
-    start = 1
-    concat, metadata = concatenate(metadata, options.aligns)
-    save_concat_align(concat, options.concat)
-    if not options.mrbayes:
-        save_concat_metadata(metadata, options.metadata)
-    else:
-        add_mr_bayes_params(metadata, options.concat)
+    #start = 1
+    #concat, metadata = concatenate(metadata, options.aligns)
+    combined = nexus_concat(options.aligns)
+    pdb.set_trace()
+    combined.write_nexus_data(filename=options.concat, interleave=True)
+    #save_concat_align(concat, options.concat)
+    #if not options.mrbayes:
+    #    save_concat_metadata(metadata, options.metadata)
+    #else:
+    #    add_mr_bayes_params(metadata, options.concat)
     #pdb.set_trace()
     
 SUBS = {
+    'GTR':{'nst':6, 'rates':None, 'statefreqpr':None},
     'GTRI':{'nst':6, 'rates':'propinv', 'statefreqpr':None}, 
     'GTRG':{'nst':6, 'rates':'gamma', 'statefreqpr':None}, 
     'GTRIG':{'nst':6, 'rates':'invgamma', 'statefreqpr':None},
